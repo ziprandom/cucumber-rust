@@ -4,19 +4,24 @@ use cucumber_rust::{after, before, cucumber, World};
 
 pub struct MyWorld {
     pub thing: bool,
+    pub last_thing: String,
 }
 
 impl World for MyWorld {}
 
 impl Default for MyWorld {
     fn default() -> MyWorld {
-        MyWorld { thing: false }
+        MyWorld {
+            thing: false,
+            last_thing: "".to_owned(),
+        }
     }
 }
 
 #[cfg(test)]
 mod basic {
     use cucumber_rust::steps;
+    use regex::Regex;
 
     steps!(crate::MyWorld => {
         when regex "thing (\\d+) does (.+)" (usize, String) |_world, _sz, _txt, _step| {
@@ -31,11 +36,46 @@ mod basic {
             assert!(true);
         };
 
+        given regex "a thing is (.*)" |world, matches, _step| {
+            world.last_thing = matches[1].clone();
+            assert!(true);
+        };
+
+        then regex "it's reverse is (.*)" |world, matches, _step| {
+            let rev = world.last_thing.chars().rev().collect::<String>();
+            assert_eq!(rev, matches[1]);
+        };
+
+
+        then regex "this (table|docstring) makes sense:" |_world, matches, step| {
+
+            match matches[1].as_str() {
+                "table" => {
+                    let table = step.table.clone().expect("this step needs a table!");
+                    for row in table.rows {
+                        assert!(row.len() == 2);
+                        assert_eq!(row[0].chars().rev().collect::<String>(), row[1]);
+                    };
+                },
+                "docstring" => {
+                    let text = step.docstring.clone().expect("this step needs a docstring!");
+                    let captures = Regex::new(r"the reverse of (.*) is (.*)")
+                        .unwrap()
+                        .captures(&text)
+                        .expect("text didn't match the expected format!");
+                    assert!(captures.len() == 3);
+                    assert_eq!(captures[1].chars().rev().collect::<String>(), captures[2]);
+                },
+                _ => panic!("only understand table or docstring")
+            };
+
+        };
+
         when "another thing" |_world, _step| {
             panic!();
         };
 
-        when "something goes right" |_world, _step| { 
+        when "something goes right" |_world, _step| {
             assert!(true);
         };
 

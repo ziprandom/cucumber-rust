@@ -193,8 +193,6 @@ impl<T: Default> Steps<T> {
         suppress_output: bool,
         output: &mut impl OutputVisitor,
     ) -> bool {
-        output.visit_scenario(rule, &scenario);
-
         if let Some(before_fns) = before_fns {
             for f in before_fns.iter() {
                 f(&scenario);
@@ -222,46 +220,68 @@ impl<T: Default> Steps<T> {
         let mut is_success = true;
         let mut is_skipping = false;
 
-        let steps = feature
-            .background
-            .iter()
-            .map(|bg| bg.steps.iter())
-            .flatten()
-            .chain(scenario.steps.iter());
+        output.visit_scenario(rule, &scenario);
 
-        for step in steps {
-            output.visit_step(rule, &scenario, &step);
-
-            let test_type = match self.test_type(&step) {
-                Some(v) => v,
-                None => {
-                    output.visit_step_result(rule, &scenario, &step, &TestResult::Unimplemented);
-                    if !is_skipping {
-                        is_skipping = true;
-                        output.visit_scenario_skipped(rule, &scenario);
-                    }
-                    continue;
+        let run_per_example_or_once = |f: &mut FnMut(&Option<gherkin::Examples>)| {
+            if let Some(ref examples) = scenario.examples {
+                for row in &examples.table.rows {
+                    let mut partial_examples = examples.clone();
+                    partial_examples.table.rows = vec![row.clone()];
+                    f(&Some(partial_examples));
                 }
-            };
-
-            if is_skipping {
-                output.visit_step_result(rule, &scenario, &step, &TestResult::Skipped);
             } else {
-                let result = self.run_test(&mut world, test_type, &step, suppress_output);
-                output.visit_step_result(rule, &scenario, &step, &result);
-                match result {
-                    TestResult::Pass => {}
-                    TestResult::Fail(_, _, _) => {
-                        is_success = false;
-                        is_skipping = true;
-                    }
-                    _ => {
-                        is_skipping = true;
-                        output.visit_scenario_skipped(rule, &scenario);
+                f(&None);
+            }
+        };
+
+        &run_per_example_or_once(&mut |examples| {
+            let steps = feature
+                .background
+                .iter()
+                .map(|bg| bg.steps.iter())
+                .flatten()
+                .chain(scenario.steps.iter());
+
+            for step in steps {
+                output.visit_step(rule, &scenario, &step);
+                let step = interpolate_outline_variables(step, examples);
+
+                let test_type = match self.test_type(&step) {
+                    Some(v) => v,
+                    None => {
+                        output.visit_step_result(
+                            rule,
+                            &scenario,
+                            &step,
+                            &TestResult::Unimplemented,
+                        );
+                        if !is_skipping {
+                            is_skipping = true;
+                            output.visit_scenario_skipped(rule, &scenario);
+                        }
+                        continue;
                     }
                 };
+
+                if is_skipping {
+                    output.visit_step_result(rule, &scenario, &step, &TestResult::Skipped);
+                } else {
+                    let result = self.run_test(&mut world, test_type, &step, suppress_output);
+                    output.visit_step_result(rule, &scenario, &step, &result);
+                    match result {
+                        TestResult::Pass => {}
+                        TestResult::Fail(_, _, _) => {
+                            is_success = false;
+                            is_skipping = true;
+                        }
+                        _ => {
+                            is_skipping = true;
+                            output.visit_scenario_skipped(rule, &scenario);
+                        }
+                    };
+                }
             }
-        }
+        });
 
         if let Some(after_fns) = after_fns {
             for f in after_fns.iter() {
@@ -382,6 +402,47 @@ impl<T: Default> Steps<T> {
 
         is_success
     }
+}
+
+fn interpolate_outline_variables(
+    step: &gherkin::Step,
+    maybe_example: &Option<gherkin::Examples>,
+) -> gherkin::Step {
+    let examples;
+    let mut step = step.clone();
+
+    if let Some(ex) = maybe_example {
+        examples = ex.clone();
+    } else {
+        return step;
+    }
+
+    fn replace_vars(text: &String, vars: &gherkin::Examples) -> String {
+        let mut res = (*text).clone();
+
+        for (i, cell) in vars.table.rows[0].iter().enumerate() {
+            res = res.replace(format!("<{}>", &vars.table.header[i]).as_str(), &cell);
+        }
+        return res;
+    }
+
+    // step text
+    step.value = replace_vars(&step.value, &examples);
+
+    // steps table
+    if let Some(ref mut table) = step.table {
+        for i in 0..table.rows.len() {
+            for j in 0..table.rows[i].len() {
+                table.rows[i][j] = replace_vars(&table.rows[i][j], &examples);
+            }
+        }
+    }
+
+    step.docstring = step
+        .docstring
+        .and_then(|doc| Some(replace_vars(&doc, &examples)));
+
+    step
 }
 
 #[doc(hidden)]
