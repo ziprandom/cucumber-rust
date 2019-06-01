@@ -222,36 +222,23 @@ impl<T: Default> Steps<T> {
 
         output.visit_scenario(rule, &scenario);
 
-        let run_per_example_or_once = |f: &mut FnMut(&Option<gherkin::Examples>)| {
-            if let Some(ref examples) = scenario.examples {
-                for row in &examples.table.rows {
-                    let mut partial_examples = examples.clone();
-                    partial_examples.table.rows = vec![row.clone()];
-                    f(&Some(partial_examples));
-                }
-            } else {
-                f(&None);
-            }
-        };
-
-        &run_per_example_or_once(&mut |examples| {
+        for scenario_run in ScenarioIterator::new(scenario) {
             let steps = feature
                 .background
                 .iter()
                 .map(|bg| bg.steps.iter())
                 .flatten()
-                .chain(scenario.steps.iter());
+                .chain(scenario_run.steps.iter());
 
             for step in steps {
-                output.visit_step(rule, &scenario, &step);
-                let step = interpolate_outline_variables(step, examples);
+                output.visit_step(rule, &scenario_run, &step);
 
                 let test_type = match self.test_type(&step) {
                     Some(v) => v,
                     None => {
                         output.visit_step_result(
                             rule,
-                            &scenario,
+                            &scenario_run,
                             &step,
                             &TestResult::Unimplemented,
                         );
@@ -264,10 +251,10 @@ impl<T: Default> Steps<T> {
                 };
 
                 if is_skipping {
-                    output.visit_step_result(rule, &scenario, &step, &TestResult::Skipped);
+                    output.visit_step_result(rule, &scenario_run, &step, &TestResult::Skipped);
                 } else {
                     let result = self.run_test(&mut world, test_type, &step, suppress_output);
-                    output.visit_step_result(rule, &scenario, &step, &result);
+                    output.visit_step_result(rule, &scenario_run, &step, &result);
                     match result {
                         TestResult::Pass => {}
                         TestResult::Fail(_, _, _) => {
@@ -276,12 +263,12 @@ impl<T: Default> Steps<T> {
                         }
                         _ => {
                             is_skipping = true;
-                            output.visit_scenario_skipped(rule, &scenario);
+                            output.visit_scenario_skipped(rule, &scenario_run);
                         }
                     };
                 }
             }
-        });
+        }
 
         if let Some(after_fns) = after_fns {
             for f in after_fns.iter() {
@@ -404,23 +391,64 @@ impl<T: Default> Steps<T> {
     }
 }
 
+// `ScenarioIterator` wraps  a `gherkin::Scenario`
+// and yields  a clone  of the scenario  for every
+// row  of  the  examples  table  with  its  steps
+// interpolated with the respective variables.  If
+// the scenario  doesn't provide any  examples and
+// hence  is not  a  Scenario Outlinethe  iterator
+// will yield exactly one copy of it.
+struct ScenarioIterator<'a> {
+    sc: &'a Scenario,
+    pos: usize,
+}
+
+impl<'a> ScenarioIterator<'a> {
+    fn new(sc: &'a Scenario) -> Self {
+        Self { sc, pos: 0 }
+    }
+}
+
+impl<'a> Iterator for ScenarioIterator<'a> {
+    type Item = Scenario;
+
+    fn next(&mut self) -> Option<Scenario> {
+        match (&self.sc.examples, self.pos) {
+            (Some(ref examples), pos) if pos < examples.table.rows.len() => {
+                let mut reduced_scenario = self.sc.clone();
+
+                if let Some(ref mut examples) = reduced_scenario.examples {
+                    examples.table.rows = vec![examples.table.rows[pos].clone()];
+                    reduced_scenario.steps = reduced_scenario
+                        .steps
+                        .iter()
+                        .map(|step| interpolate_outline_variables(step, examples))
+                        .collect();
+                    self.pos += 1;
+                }
+
+                Some(reduced_scenario)
+            }
+            (None, 0) => {
+                self.pos += 1;
+                Some(self.sc.clone())
+            }
+            (_, _) => None,
+        }
+    }
+}
+
 fn interpolate_outline_variables(
     step: &gherkin::Step,
-    maybe_example: &Option<gherkin::Examples>,
+    examples: &gherkin::Examples,
 ) -> gherkin::Step {
-    let examples;
     let mut step = step.clone();
-
-    if let Some(ex) = maybe_example {
-        examples = ex.clone();
-    } else {
-        return step;
-    }
 
     fn replace_vars(text: &str, vars: &gherkin::Examples) -> String {
         vars.table
             .header
-            .iter().map(|key| format!("<{}>", key))
+            .iter()
+            .map(|key| format!("<{}>", key))
             .zip(&vars.table.rows[0])
             .fold(text.to_owned(), |text, (key, value)| -> String {
                 text.replace(key.as_str(), value)
@@ -430,15 +458,20 @@ fn interpolate_outline_variables(
     // step text
     step.value = replace_vars(&step.value, &examples);
 
-    // steps table
+    // step table
     if let Some(ref mut table) = step.table {
-        table.rows = table.rows.iter().map(|row| {
-            row.iter().map(|cell| {
-                replace_vars(cell, &examples)
-            }).collect()
-        }).collect()
+        table.rows = table
+            .rows
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|cell| replace_vars(cell, &examples))
+                    .collect()
+            })
+            .collect()
     }
 
+    // step docstring
     step.docstring = step
         .docstring
         .and_then(|doc| Some(replace_vars(&doc, &examples)));
