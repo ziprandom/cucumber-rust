@@ -14,7 +14,12 @@ pub trait OutputVisitor: Default {
     fn visit_rule(&mut self, rule: &gherkin::Rule);
     fn visit_rule_end(&mut self, rule: &gherkin::Rule);
     fn visit_scenario(&mut self, rule: Option<&gherkin::Rule>, scenario: &gherkin::Scenario);
-    fn visit_scenario_end(&mut self, rule: Option<&gherkin::Rule>, scenario: &gherkin::Scenario);
+    fn visit_scenario_end(
+        &mut self,
+        rule: Option<&gherkin::Rule>,
+        scenario: &gherkin::Scenario,
+        example: Option<&[String]>,
+    );
     fn visit_scenario_skipped(
         &mut self,
         rule: Option<&gherkin::Rule>,

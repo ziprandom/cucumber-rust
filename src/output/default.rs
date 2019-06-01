@@ -131,61 +131,64 @@ impl DefaultOutput {
         .expect("invalid target path")
     }
 
+    fn print_table(&mut self, table: &gherkin::Table, indent: &str) {
+        // Find largest sized item per column
+        let mut max_size: Vec<usize> = (&table.header).iter().map(|h| h.len()).collect();
+
+        for row in &table.rows {
+            for (n, field) in row.iter().enumerate() {
+                if field.len() > max_size[n] {
+                    max_size[n] = field.len();
+                }
+            }
+        }
+
+        // If number print in a number way
+        let formatted_header_fields: Vec<String> = (&table.header)
+            .iter()
+            .enumerate()
+            .map(|(n, field)| format!(" {: <1$} ", field, max_size[n]))
+            .collect();
+
+        let formatted_row_fields: Vec<Vec<String>> = (&table.rows)
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .enumerate()
+                    .map(|(n, field)| {
+                        if field.parse::<f64>().is_ok() {
+                            format!(" {: >1$} ", field, max_size[n])
+                        } else {
+                            format!(" {: <1$} ", field, max_size[n])
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
+
+        print!("{}", indent);
+        let border_color = Color::Magenta;
+        self.write("|", border_color, true);
+        for field in formatted_header_fields {
+            self.write(&field, Color::White, true);
+            self.write("|", border_color, true);
+        }
+        self.println("");
+
+        for row in formatted_row_fields {
+            print!("{}", indent);
+            self.write("|", border_color, false);
+            for field in row {
+                print!("{}", field);
+                self.write("|", border_color, false);
+            }
+            self.println("");
+        }
+    }
     fn print_step_extras(&mut self, step: &gherkin::Step) {
         let indent = "      ";
         if let Some(ref table) = &step.table {
-            // Find largest sized item per column
-            let mut max_size: Vec<usize> = (&table.header).iter().map(|h| h.len()).collect();
-
-            for row in &table.rows {
-                for (n, field) in row.iter().enumerate() {
-                    if field.len() > max_size[n] {
-                        max_size[n] = field.len();
-                    }
-                }
-            }
-
-            // If number print in a number way
-            let formatted_header_fields: Vec<String> = (&table.header)
-                .iter()
-                .enumerate()
-                .map(|(n, field)| format!(" {: <1$} ", field, max_size[n]))
-                .collect();
-
-            let formatted_row_fields: Vec<Vec<String>> = (&table.rows)
-                .iter()
-                .map(|row| {
-                    row.iter()
-                        .enumerate()
-                        .map(|(n, field)| {
-                            if field.parse::<f64>().is_ok() {
-                                format!(" {: >1$} ", field, max_size[n])
-                            } else {
-                                format!(" {: <1$} ", field, max_size[n])
-                            }
-                        })
-                        .collect()
-                })
-                .collect();
-
-            print!("{}", indent);
-            let border_color = Color::Magenta;
-            self.write("|", border_color, true);
-            for field in formatted_header_fields {
-                self.write(&field, Color::White, true);
-                self.write("|", border_color, true);
-            }
-            self.println("");
-
-            for row in formatted_row_fields {
-                print!("{}", indent);
-                self.write("|", border_color, false);
-                for field in row {
-                    print!("{}", field);
-                    self.write("|", border_color, false);
-                }
-                self.println("");
-            }
+            self.print_table(table, indent);
         };
 
         if let Some(ref docstring) = &step.docstring {
@@ -394,11 +397,24 @@ impl OutputVisitor for DefaultOutput {
         }
     }
 
-    fn visit_scenario_end(&mut self, _rule: Option<&gherkin::Rule>, scenario: &gherkin::Scenario) {
+    fn visit_scenario_end(
+        &mut self,
+        _rule: Option<&gherkin::Rule>,
+        scenario: &gherkin::Scenario,
+        example: Option<&[String]>,
+    ) {
         if !self.scenarios.contains_key(scenario) {
             self.scenarios
                 .insert(scenario.clone(), ScenarioResult::Pass);
         }
+
+        if let Some(mut examples) = scenario.examples.clone() {
+            examples.table.rows = vec![example.unwrap().to_owned()];
+
+            self.bold_white("\n Example:\n");
+            self.print_table(&examples.table, "    ");
+        }
+
         self.println("");
     }
 
