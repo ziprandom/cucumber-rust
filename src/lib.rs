@@ -193,6 +193,8 @@ impl<T: Default> Steps<T> {
         suppress_output: bool,
         output: &mut impl OutputVisitor,
     ) -> bool {
+        output.visit_scenario(rule, &scenario);
+
         if let Some(before_fns) = before_fns {
             for f in before_fns.iter() {
                 f(&scenario);
@@ -220,53 +222,44 @@ impl<T: Default> Steps<T> {
         let mut is_success = true;
         let mut is_skipping = false;
 
-        output.visit_scenario(rule, &scenario);
+        let steps = feature
+            .background
+            .iter()
+            .map(|bg| bg.steps.iter())
+            .flatten()
+            .chain(scenario.steps.iter());
 
-        for scenario_run in ScenarioIterator::new(scenario) {
-            let steps = feature
-                .background
-                .iter()
-                .map(|bg| bg.steps.iter())
-                .flatten()
-                .chain(scenario_run.steps.iter());
+        for step in steps {
+            output.visit_step(rule, &scenario, &step);
 
-            for step in steps {
-                output.visit_step(rule, &scenario_run, &step);
+            let test_type = match self.test_type(&step) {
+                Some(v) => v,
+                None => {
+                    output.visit_step_result(rule, &scenario, &step, &TestResult::Unimplemented);
+                    if !is_skipping {
+                        is_skipping = true;
+                        output.visit_scenario_skipped(rule, &scenario);
+                    }
+                    continue;
+                }
+            };
 
-                let test_type = match self.test_type(&step) {
-                    Some(v) => v,
-                    None => {
-                        output.visit_step_result(
-                            rule,
-                            &scenario_run,
-                            &step,
-                            &TestResult::Unimplemented,
-                        );
-                        if !is_skipping {
-                            is_skipping = true;
-                            output.visit_scenario_skipped(rule, &scenario);
-                        }
-                        continue;
+            if is_skipping {
+                output.visit_step_result(rule, &scenario, &step, &TestResult::Skipped);
+            } else {
+                let result = self.run_test(&mut world, test_type, &step, suppress_output);
+                output.visit_step_result(rule, &scenario, &step, &result);
+                match result {
+                    TestResult::Pass => {}
+                    TestResult::Fail(_, _, _) => {
+                        is_success = false;
+                        is_skipping = true;
+                    }
+                    _ => {
+                        is_skipping = true;
+                        output.visit_scenario_skipped(rule, &scenario);
                     }
                 };
-
-                if is_skipping {
-                    output.visit_step_result(rule, &scenario_run, &step, &TestResult::Skipped);
-                } else {
-                    let result = self.run_test(&mut world, test_type, &step, suppress_output);
-                    output.visit_step_result(rule, &scenario_run, &step, &result);
-                    match result {
-                        TestResult::Pass => {}
-                        TestResult::Fail(_, _, _) => {
-                            is_success = false;
-                            is_skipping = true;
-                        }
-                        _ => {
-                            is_skipping = true;
-                            output.visit_scenario_skipped(rule, &scenario_run);
-                        }
-                    };
-                }
             }
         }
 
@@ -312,16 +305,18 @@ impl<T: Default> Steps<T> {
                 }
             }
 
-            if !self.run_scenario(
-                &feature,
-                rule,
-                &scenario,
-                &before_fns,
-                &after_fns,
-                options.suppress_output,
-                output,
-            ) {
-                is_success = false;
+            for scenario_run in ScenarioIterator::new(scenario) {
+                if !self.run_scenario(
+                    &feature,
+                    rule,
+                    &scenario_run,
+                    &before_fns,
+                    &after_fns,
+                    options.suppress_output,
+                    output,
+                ) {
+                    is_success = false;
+                }
             }
         }
 
