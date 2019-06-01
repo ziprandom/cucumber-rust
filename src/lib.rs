@@ -417,13 +417,14 @@ fn interpolate_outline_variables(
         return step;
     }
 
-    fn replace_vars(text: &String, vars: &gherkin::Examples) -> String {
-        let mut res = (*text).clone();
-
-        for (i, cell) in vars.table.rows[0].iter().enumerate() {
-            res = res.replace(format!("<{}>", &vars.table.header[i]).as_str(), &cell);
-        }
-        return res;
+    fn replace_vars(text: &str, vars: &gherkin::Examples) -> String {
+        vars.table
+            .header
+            .iter().map(|key| format!("<{}>", key))
+            .zip(&vars.table.rows[0])
+            .fold(text.to_owned(), |text, (key, value)| -> String {
+                text.replace(key.as_str(), value)
+            })
     }
 
     // step text
@@ -431,11 +432,11 @@ fn interpolate_outline_variables(
 
     // steps table
     if let Some(ref mut table) = step.table {
-        for i in 0..table.rows.len() {
-            for j in 0..table.rows[i].len() {
-                table.rows[i][j] = replace_vars(&table.rows[i][j], &examples);
-            }
-        }
+        table.rows = table.rows.iter().map(|row| {
+            row.iter().map(|cell| {
+                replace_vars(cell, &examples)
+            }).collect()
+        }).collect()
     }
 
     step.docstring = step
